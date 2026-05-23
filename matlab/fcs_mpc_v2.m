@@ -1,20 +1,17 @@
 function [accel_cmd, steer_cmd] = fcs_mpc_v2(x, y, psi, v, ref_x, ref_y)
     %#codegen
-    % STRICT 16-BIT MPC: KINEMATIC CONSTRAINT SOLVER
-    % Scale: 1m = 64 units (Q10.6)
+    % FCS-MPC: int16 kinematic solver, 1m = 64 units (Q10.6).
 
-    V_MAX   = int16(320); % 5 m/s
+    V_MAX   = int16(320);
     
-    % --- WEIGHTS ---
     W_ERR       = int16(15);  
     W_STEER     = int16(2);   
     W_SPEED     = int16(2);   
     
-    % --- CONTROL SET ---
     STEER_OPTS = int16([0, -2, 2, -6, 6,-10,10,-14,14,-18,18,-22,22,-24,24,-26,26]);
     ACCEL_OPTS = int16([0, 10, 5, 1, -5, -1, -10,-20]); 
     
-    % --- LUT ---
+    % Sin/Cos LUTs built from quarter-wave Q1
     q1_a = [0, 3, 6, 9, 12, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46];
     q1_b = [49, 51, 54, 57, 60, 63, 65, 68, 71, 73, 76, 78, 81, 83, 85, 88];
     q1_c = [90, 92, 94, 96, 98, 100, 102, 104, 106, 107, 109, 111, 112, 114, 115, 116];
@@ -23,13 +20,10 @@ function [accel_cmd, steer_cmd] = fcs_mpc_v2(x, y, psi, v, ref_x, ref_y)
     Q2 = Q1(end:-1:1); Q3 = -Q1; Q4 = -Q2;
     SIN_LUT = [Q1, Q2, Q3, Q4]; COS_LUT = [Q2, Q3, Q4, Q1]; 
 
-    min_cost = int16(32767); % Max 16-bit integer
+    min_cost = int16(32767);
     best_acc = int16(0);
     best_str = int16(0);
     
-    % MASSIVE CLAMP VAL: 1000 units (~15 meters). 
-    % Ensures the car never stops trying to reach the track.
-    % Max distance cost: (1000 + 1000) * 15 = 30000 (safely under 32767).
     CLAMP_VAL = int16(1000); 
     
     for s_idx = 1:17
@@ -69,7 +63,6 @@ function [accel_cmd, steer_cmd] = fcs_mpc_v2(x, y, psi, v, ref_x, ref_y)
             steer_cost = abs(delta) * W_STEER;
             speed_rwd  = v_next * W_SPEED;
             
-            % Clean, simple cost. No fake violation penalties.
             cost = dist_cost + steer_cost - speed_rwd;
             
             if cost < min_cost
