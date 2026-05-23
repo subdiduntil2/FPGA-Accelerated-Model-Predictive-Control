@@ -1,3 +1,5 @@
+-- AXI4-Lite slave: register bank + kick FSM driving the fcs_mpc_v2_fixpt core.
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -35,7 +37,6 @@ end MPC_controller_AXI_v1_0_S00_AXI;
 
 architecture arch_imp of MPC_controller_AXI_v1_0_S00_AXI is
 
-    -- AXI4LITE boilerplate signals (These fix the "not recognized" errors)
     signal axi_awaddr   : std_logic_vector(C_S_AXI_ADDR_WIDTH-1 downto 0);
     signal axi_awready  : std_logic;
     signal axi_wready   : std_logic;
@@ -47,38 +48,31 @@ architecture arch_imp of MPC_controller_AXI_v1_0_S00_AXI is
     signal axi_rresp    : std_logic_vector(1 downto 0);
     signal axi_rvalid   : std_logic;
 
-    -- Register bank corresponding to C code offsets
-    signal slv_reg0     : std_logic_vector(31 downto 0); -- CTRL (0x00)
-    signal slv_reg1     : std_logic_vector(31 downto 0); -- STATUS (0x04)
-    signal slv_reg4     : std_logic_vector(31 downto 0); -- X (0x10)
-    signal slv_reg5     : std_logic_vector(31 downto 0); -- Y (0x14)
-    signal slv_reg6     : std_logic_vector(31 downto 0); -- PSI (0x18)
-    signal slv_reg7     : std_logic_vector(31 downto 0); -- V (0x1C)
-    signal slv_reg8     : std_logic_vector(31 downto 0); -- REF_X (0x20)
-    signal slv_reg9     : std_logic_vector(31 downto 0); -- REF_Y (0x24)
-    signal slv_reg12    : std_logic_vector(31 downto 0); -- ACCEL (0x30) -- sfix6 accel_cmd, sign-extended to 32b
-    signal slv_reg13    : std_logic_vector(31 downto 0); -- STEER (0x34) -- sfix6 steer_cmd, sign-extended to 32b
-    signal slv_reg16    : std_logic_vector(31 downto 0); -- TICK (0x40)
+    signal slv_reg0     : std_logic_vector(31 downto 0);
+    signal slv_reg1     : std_logic_vector(31 downto 0);
+    signal slv_reg4     : std_logic_vector(31 downto 0);
+    signal slv_reg5     : std_logic_vector(31 downto 0);
+    signal slv_reg6     : std_logic_vector(31 downto 0);
+    signal slv_reg7     : std_logic_vector(31 downto 0);
+    signal slv_reg8     : std_logic_vector(31 downto 0);
+    signal slv_reg9     : std_logic_vector(31 downto 0);
+    signal slv_reg12    : std_logic_vector(31 downto 0);
+    signal slv_reg13    : std_logic_vector(31 downto 0);
+    signal slv_reg16    : std_logic_vector(31 downto 0);
 
     signal slv_reg_wren : std_logic;
     signal slv_reg_rden : std_logic;
     signal aw_en        : std_logic;
     constant ADDR_LSB   : integer := 2;
 
-    -- MPC Logic Signals
-    --
-    -- accel_cmd is sfix6 (6-bit signed) -- widened from sfix5 to carry
-    -- ACCEL_OPTS = -20 from fcs_mpc_v2.m which does not fit in 5-bit
-    -- two's complement (range -16..15).
     signal mpc_reset    : std_logic;
-    signal mpc_accel    : std_logic_vector(5 downto 0);  -- sfix6 (was 4 downto 0)
-    signal mpc_steer    : std_logic_vector(5 downto 0);  -- sfix6
+    signal mpc_accel    : std_logic_vector(5 downto 0);
+    signal mpc_steer    : std_logic_vector(5 downto 0);
     type state_t is (S_IDLE, S_RUN, S_CAPTURE);
     signal state        : state_t := S_IDLE;
     signal wait_cnt     : unsigned(3 downto 0) := (others => '0');
 
 begin
-    -- Port I/O assignments
     S_AXI_AWREADY <= axi_awready;
     S_AXI_WREADY  <= axi_wready;
     S_AXI_BRESP   <= axi_bresp;
@@ -89,7 +83,7 @@ begin
     S_AXI_RVALID  <= axi_rvalid;
     mpc_reset     <= not S_AXI_ARESETN;
 
-    -- 1. Instantiate the MPC Core
+    -- MPC core instance
     u_mpc : entity work.fcs_mpc_v2_fixpt
         port map (
             clk       => S_AXI_ACLK,
@@ -104,7 +98,7 @@ begin
             steer_cmd => mpc_steer
         );
 
-    -- 2. AXI Write Address & Data Handshaking [cite: 46-58]
+    -- AXI write handshake
     process (S_AXI_ACLK)
     begin
         if rising_edge(S_AXI_ACLK) then 
@@ -114,7 +108,6 @@ begin
                 axi_bvalid  <= '0';
                 aw_en <= '1';
             else
-                -- Address ready
                 if (axi_awready = '0' and S_AXI_AWVALID = '1' and S_AXI_WVALID = '1' and aw_en = '1') then
                     axi_awready <= '1';
                     aw_en <= '0';
@@ -125,13 +118,11 @@ begin
                 else
                     axi_awready <= '0';
                 end if;
-                -- Data ready
                 if (axi_wready = '0' and S_AXI_WVALID = '1' and S_AXI_AWVALID = '1' and aw_en = '1') then
                     axi_wready <= '1';
                 else
                     axi_wready <= '0';
                 end if;
-                -- Write response
                 if (axi_awready = '1' and S_AXI_AWVALID = '1' and axi_wready = '1' and S_AXI_WVALID = '1' and axi_bvalid = '0') then
                     axi_bvalid <= '1';
                     axi_bresp  <= "00"; 
@@ -142,7 +133,7 @@ begin
         end if;
     end process;
 
-    -- 3. Register Write Logic & Kick FSM [cite: 68, 80-92]
+    -- Register write + kick FSM
     slv_reg_wren <= axi_wready and S_AXI_WVALID and axi_awready and S_AXI_AWVALID;
     process (S_AXI_ACLK)
         variable loc_addr : std_logic_vector(4 downto 0);
@@ -160,7 +151,7 @@ begin
                 slv_reg16 <= (others => '0');
             else
                 loc_addr := axi_awaddr(6 downto 2);
-                slv_reg0(0) <= '0'; -- Kick is self-clearing [cite: 68]
+                slv_reg0(0) <= '0';
 
                 if (slv_reg_wren = '1') then
                     case loc_addr is
@@ -171,38 +162,36 @@ begin
                         when "00111" => slv_reg7 <= S_AXI_WDATA;
                         when "01000" => slv_reg8 <= S_AXI_WDATA;
                         when "01001" => slv_reg9 <= S_AXI_WDATA;
-                        when others  => null; -- Protect status/accel/steer [cite: 7]
+                        when others  => null;
                     end case;
                 end if;
 
                 case state is
                     when S_IDLE =>
-                        slv_reg1(1) <= '0'; -- Busy=0
+                        slv_reg1(1) <= '0';
                         if (slv_reg_wren = '1' and loc_addr = "00000" and S_AXI_WDATA(0) = '1') then
                             state <= S_RUN;
                             wait_cnt <= (others => '0');
-                            slv_reg1(0) <= '0'; -- Clear Done
-                            slv_reg1(1) <= '1'; -- Busy=1
+                            slv_reg1(0) <= '0';
+                            slv_reg1(1) <= '1';
                         end if;
                     when S_RUN =>
                         wait_cnt <= wait_cnt + 1;
                         if wait_cnt = 4 then state <= S_CAPTURE; end if;
                     when S_CAPTURE =>
-                        -- accel_cmd is now sfix6 -> sign-extend bit 5 across 31..6
-                        -- (was sfix5 with sign-extend bit 4 across 31..5)
-                        slv_reg12(31 downto 6) <= (others => mpc_accel(5)); -- sign extension
+                        slv_reg12(31 downto 6) <= (others => mpc_accel(5));
                         slv_reg12(5 downto 0)  <= mpc_accel;
                         slv_reg13(31 downto 6) <= (others => mpc_steer(5));
                         slv_reg13(5 downto 0)  <= mpc_steer;
-                        slv_reg1(0) <= '1'; -- Done=1
-                        slv_reg16 <= std_logic_vector(unsigned(slv_reg16) + 1); -- Tick counter [cite: 91]
+                        slv_reg1(0) <= '1';
+                        slv_reg16 <= std_logic_vector(unsigned(slv_reg16) + 1);
                         state <= S_IDLE;
                 end case;
             end if;
         end if;
     end process;
 
-    -- 4. AXI Read Logic [cite: 96-118]
+    -- AXI read handshake + readback mux
     process (S_AXI_ACLK)
     begin
         if rising_edge(S_AXI_ACLK) then
@@ -242,7 +231,6 @@ begin
         end if;
     end process;
 
-    -- Interrupt logic: done AND irq_en
     mpc_irq <= slv_reg1(0) and slv_reg0(2);
 
 end arch_imp;

@@ -1,3 +1,5 @@
+-- Top-level wrapper: instantiates the AXI4-Lite slave for the MPC controller.
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -5,13 +7,10 @@ use ieee.numeric_std.all;
 entity MPC_controller_AXI_v1_0 is
     generic (
         C_S00_AXI_DATA_WIDTH    : integer    := 32;
-        C_S00_AXI_ADDR_WIDTH    : integer    := 7 -- 7 bits for offsets up to 0x40
+        C_S00_AXI_ADDR_WIDTH    : integer    := 7
     );
     port (
-        -- User port: Connect this to IRQ_F2P in Block Design
-        mpc_irq         : out std_logic; 
-
-        -- Standard AXI Slave Ports
+        mpc_irq         : out std_logic;
         s00_axi_aclk    : in std_logic;
         s00_axi_aresetn : in std_logic;
         s00_axi_awaddr  : in std_logic_vector(C_S00_AXI_ADDR_WIDTH-1 downto 0);
