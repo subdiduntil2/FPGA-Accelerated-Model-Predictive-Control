@@ -1,6 +1,4 @@
-/* =========================================================================
- * mpc_smoketest.c
- * ========================================================================= */
+/* mpc_smoketest.c -- Cora Z7-07S trajectory replay for the MPC IP. */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -11,11 +9,8 @@
 #include "xtime_l.h"
 #include "sleep.h"
 
-#include "trajectory_data.h"   /* x_data[], y_data[], ..., accel_exp[], steer_exp[], TRAJECTORY_LEN */
+#include "trajectory_data.h"
 
-/* -------------------------------------------------------------------------
- * MPC IP base address.
- * ------------------------------------------------------------------------- */
 #ifdef XPAR_MPC_CONTROLLER_AXI_0_S00_AXI_BASEADDR
   #define MPC_BASE_ADDR  XPAR_MPC_CONTROLLER_AXI_0_S00_AXI_BASEADDR
 #else
@@ -46,24 +41,12 @@ static inline uint64_t ticks_to_ns(uint64_t ticks) {
     return (ticks * 1000000000ull) / (uint64_t)COUNTS_PER_SECOND;
 }
 
-/* The IP outputs are int16 sign-extended into the lower 16 bits of the
- * 32-bit AXI read register. Recover signed value cleanly. */
+/* Sign-extend int16 result from the lower 16 bits of an AXI read */
 static inline int32_t reg_to_s16(uint32_t r) {
     return (int32_t)(int16_t)(r & 0xFFFFu);
 }
 
-/* -------------------------------------------------------------------------
- * Output mode:
- *   MODE_SUMMARY  : final stats + edges + mismatches only (default)
- *   MODE_VERBOSE  : every sample, human-readable, signed decimals
- *   MODE_CSV      : pure CSV stream for compare_fpga_matlab.m
- *                   header line is "idx,gx,gy,gpsi,gv,grx,gry,gacc,eacc,gstr,estr,pl_ns,e2_ns,ok"
- *                   Columns gx..gry are FPGA register READBACKS (real
- *                   AXI bus integrity check). Columns gacc/gstr are the
- *                   FPGA-computed outputs. eacc/estr are the MATLAB-
- *                   expected ground truth from trajectory_data.h.
- *                   capture serial output to a file then run the MATLAB script.
- * ------------------------------------------------------------------------- */
+/* Output mode: SUMMARY (default) | VERBOSE | CSV (for compare_fpga_matlab.m) */
 #define MODE_SUMMARY  0
 #define MODE_VERBOSE  1
 #define MODE_CSV      2
@@ -94,7 +77,6 @@ int main(void) {
             while (1) sleep(1);
         }
     } else {
-        /* CSV header */
         xil_printf("idx,gx,gy,gpsi,gv,grx,gry,gacc,eacc,gstr,estr,pl_ns,e2_ns,ok\r\n");
     }
 
@@ -126,9 +108,6 @@ int main(void) {
 
         XTime_GetTime(&t0);
 
-        /* Inputs are signed int16 in the .dat. Sign-extend to 32-bit
-         * so the bit pattern on AXI matches the signed value the IP
-         * expects. */
         mpc_write(MPC_OFF_X,     (uint32_t)(int32_t)x_data[t]);
         mpc_write(MPC_OFF_Y,     (uint32_t)(int32_t)y_data[t]);
         mpc_write(MPC_OFF_PSI,   (uint32_t)(int32_t)psi_data[t]);
@@ -153,27 +132,14 @@ int main(void) {
 
         XTime_GetTime(&t1);
 
-        /* ---------- input read-back: real input-echo check ----------
-         * Read the input registers AFTER the FPGA finished computing.
-         * The wrapper holds them across the kick (slv_reg4..slv_reg9 are
-         * R/W registers, not modified by the FSM), so this returns exactly
-         * what the DUT consumed.  Placed after t1 so the diagnostic reads
-         * don't inflate the end-to-end latency metric.
-         *
-         * x, y, psi, ref_x are signed; v and ref_y are unsigned.  Use
-         * width-aware masks to recover the natural int value the C code
-         * wrote, mirroring what the .dat files store at their native widths.
-         */
+        /* Input read-back (AXI bus integrity check, placed after t1) */
         int32_t bus_x   = reg_to_s16(mpc_read(MPC_OFF_X));
         int32_t bus_y   = reg_to_s16(mpc_read(MPC_OFF_Y));
         int32_t bus_psi = reg_to_s16(mpc_read(MPC_OFF_PSI));
-        int32_t bus_v   = (int32_t)(mpc_read(MPC_OFF_V)     & 0x1FFu);   /* ufix9   */
+        int32_t bus_v   = (int32_t)(mpc_read(MPC_OFF_V)     & 0x1FFu);
         int32_t bus_rx  = reg_to_s16(mpc_read(MPC_OFF_REF_X));
-        int32_t bus_ry  = (int32_t)(mpc_read(MPC_OFF_REF_Y) & 0xFFFu);   /* ufix12  */
+        int32_t bus_ry  = (int32_t)(mpc_read(MPC_OFF_REF_Y) & 0xFFFu);
 
-        /* Signed compare in the natural int16 domain -- this matches
-         * what fcs_mpc_v2.m returns and what fcs_mpc_v2_fixpt_tb.vhd
-         * is comparing in simulation. */
         int32_t got_accel = reg_to_s16(got_accel_raw);
         int32_t got_steer = reg_to_s16(got_steer_raw);
         int32_t exp_accel = (int32_t)accel_exp[t];
@@ -198,13 +164,7 @@ int main(void) {
         e2_sum += e2_ns;
         valid++;
 
-        /* ---------- per-sample output ---------- */
         if (OUTPUT_MODE == MODE_CSV) {
-            /* Columns gx..gry are FPGA-side READBACKS, not host-side echoes.
-             * compare_fpga_matlab.m's input-echo check therefore verifies
-             * that the AXI register file actually held what we wrote
-             * (i.e., AXI bus integrity), not just that the .h and .dat
-             * came from the same MATLAB run. */
             xil_printf("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u,%d\r\n",
                        t,
                        (int)bus_x, (int)bus_y, (int)bus_psi, (int)bus_v,
@@ -233,7 +193,6 @@ done:
     uint64_t total_ns = ticks_to_ns(t_traj_end - t_traj_start);
 
     if (OUTPUT_MODE == MODE_CSV) {
-        /* Footer comments are ignored by the MATLAB parser (it filters '#') */
         xil_printf("# done valid=%d matches=%d acc_diff=%d str_diff=%d first_mm=%d\r\n",
                    valid, matches, mismatches_accel, mismatches_steer, first_mismatch_idx);
         xil_printf("# pl_ns min=%u avg=%u max=%u\r\n",
