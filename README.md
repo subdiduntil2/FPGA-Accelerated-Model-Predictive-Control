@@ -1,5 +1,5 @@
 # FPGA-Accelerated-Model-Predictive-Control
-This repository includes all software and hardware files for the FPGA implementation of a low-cost, low-latency model predictive controller, targeting a conventional CORAZ7 board. Current version supports end-to-end validation of the proposed implementation, software-hardware comparison metrics as well as an AXI-stream protocol for MCU/PL communication. Extended documentation can be found in the docs folder.
+This repository includes all software and hardware files for the FPGA implementation of a low-latency model predictive controller, targeting a conventional, low-cost CORAZ7 board. Current version supports end-to-end validation of the proposed implementation, software-hardware comparison metrics as well as an AXI-stream protocol for MCU/PL communication. Extended documentation can be found in the docs folder.
 Future steps include:
 1. Addition of more complex tracks for path tracking
 2. Fix of timing violations (WNS/TNS) on FPGA
