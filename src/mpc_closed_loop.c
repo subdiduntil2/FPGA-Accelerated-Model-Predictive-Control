@@ -31,7 +31,7 @@
 
 /* Software reference controller (LUTs + FCS search). Compiled ONLY when the SW
    backend is selected; the FPGA binary omits it entirely, so a closed-loop FPGA
-   run can obtain its commands only from the IP over AXI — never in software. */
+   run can obtain its commands only from the IP over AXI ï¿½ never in software. */
 #if !USE_FPGA
 static int16_t SIN_LUT[256], COS_LUT[256];
 static void build_luts(void) {
@@ -48,28 +48,34 @@ static void build_luts(void) {
 }
 
 static void mpc_step_sw(int16_t x, int16_t y, int16_t psi, int16_t v,
-                        int16_t ref_x, int16_t ref_y, int16_t *accel, int16_t *steer) {
-    static const int16_t STEER_OPTS[17] = {0,-2,2,-6,6,-10,10,-14,14,-18,18,-22,22,-24,24,-26,26};
-    static const int16_t ACCEL_OPTS[8]  = {0,10,5,1,-5,-1,-10,-20};
-    int16_t min_cost = 32767, best_a = 0, best_s = 0;
+                        int16_t ref_x, int16_t ref_y, int16_t ref_v,
+                        int16_t *accel, int16_t *steer) {
+    /* v4: cost(s,a) = A(s) + B(a) is separable, so the two argmins are independent. */
+    static const int16_t STEER_OPTS[17] = {0,-2,2,-4,4,-7,7,-10,10,-14,14,-18,18,-22,22,-26,26};
+    static const int16_t ACCEL_OPTS[8]  = {0,20,10,4,-4,-10,-20,-31};
+    int16_t minA = 32767, best_s = 0, minB = 32767, best_a = 0;
+    int vred = v >> 4;
     for (int si = 0; si < 17; si++) {
         int d = STEER_OPTS[si], ad = d < 0 ? -d : d;
-        int psin = (int16_t)(psi + (((int)v * d) >> 8));
-        int idx = psin & 0xFF, c = COS_LUT[idx], s = SIN_LUT[idx];
-        int vred = v >> 4;
+        int psin = (int16_t)(psi + (int16_t)(((int)v * d) >> 9));   /* v4: >>9 */
+        int idx = psin & 0xFF, c = COS_LUT[idx], sn = SIN_LUT[idx];
         int xn = (int16_t)(x + (int16_t)((vred * c) >> 5));
-        int yn = (int16_t)(y + (int16_t)((vred * s) >> 5));
-        for (int ai = 0; ai < 8; ai++) {
-            int a = ACCEL_OPTS[ai], vnext = v + a;
-            if (vnext > 320) vnext = 320;
-            if (vnext < 0) vnext = 0;
-            int ex = xn - ref_x, ey = yn - ref_y;
-            int axv = ex < 0 ? -ex : ex, ayv = ey < 0 ? -ey : ey;
-            if (axv > 1000) axv = 1000;
-            if (ayv > 1000) ayv = 1000;
-            int cost = (axv + ayv) * 15 + ad * 2 - vnext * 2;
-            if (cost < min_cost) { min_cost = (int16_t)cost; best_a = (int16_t)a; best_s = (int16_t)d; }
-        }
+        int yn = (int16_t)(y + (int16_t)((vred * sn) >> 5));
+        int ex = xn - ref_x, ey = yn - ref_y;
+        int axv = ex < 0 ? -ex : ex, ayv = ey < 0 ? -ey : ey;
+        if (axv > 1000) axv = 1000;
+        if (ayv > 1000) ayv = 1000;
+        int A = (axv + ayv) * 15 + ad * 2;
+        if (A < minA) { minA = (int16_t)A; best_s = (int16_t)d; }
+    }
+    for (int ai = 0; ai < 8; ai++) {
+        int a = ACCEL_OPTS[ai], vn = v + a;
+        if (vn > 640) vn = 640;                 /* v4: V_MAX = 640 (10 m/s) */
+        if (vn < 0) vn = 0;
+        int ov = vn - ref_v; if (ov < 0) ov = 0; if (ov > 255) ov = 255;
+        int rw = vn;         if (rw > ref_v) rw = ref_v;
+        int B = ov * 6 - rw * 2;
+        if (B < minB) { minB = (int16_t)B; best_a = (int16_t)a; }
     }
     *accel = best_a; *steer = best_s;
 }
@@ -92,16 +98,19 @@ static void mpc_step_sw(int16_t x, int16_t y, int16_t psi, int16_t v,
 #define R_V 0x1Cu
 #define R_REF_X 0x20u
 #define R_REF_Y 0x24u
+#define R_REF_V 0x28u   /* v4: speed-profile input */
 #define R_ACCEL 0x30u
 #define R_STEER 0x34u
 #define CTRL_KICK (1u<<0)
 #define CTRL_EN   (1u<<1)
 #define STATUS_DONE (1u<<0)
 static void mpc_step_fpga(int16_t x, int16_t y, int16_t psi, int16_t v,
-                          int16_t ref_x, int16_t ref_y, int16_t *accel, int16_t *steer) {
+                          int16_t ref_x, int16_t ref_y, int16_t ref_v,
+                          int16_t *accel, int16_t *steer) {
     Xil_Out32(MPC_BASE+R_X,(uint32_t)(int32_t)x);   Xil_Out32(MPC_BASE+R_Y,(uint32_t)(int32_t)y);
     Xil_Out32(MPC_BASE+R_PSI,(uint32_t)(int32_t)psi); Xil_Out32(MPC_BASE+R_V,(uint32_t)(int32_t)v);
     Xil_Out32(MPC_BASE+R_REF_X,(uint32_t)(int32_t)ref_x); Xil_Out32(MPC_BASE+R_REF_Y,(uint32_t)(int32_t)ref_y);
+    Xil_Out32(MPC_BASE+R_REF_V,(uint32_t)(int32_t)ref_v);            /* v4: MUST be written */
     Xil_Out32(MPC_BASE+R_CTRL, CTRL_KICK|CTRL_EN);
     while (!(Xil_In32(MPC_BASE+R_STATUS) & STATUS_DONE)) { }
     int a = Xil_In32(MPC_BASE+R_ACCEL) & 0x3F; if (a & 0x20) a -= 64;
@@ -126,7 +135,7 @@ static double det_sqrt(double x) { double r; __asm__ ("vsqrt.f64 %P0, %P1" : "=w
 static double det_sqrt(double x) { return sqrt(x); }
 #endif
 
-/* harness: nearest point, look-ahead, quantize, bicycle plant (mirrors fcs_mpc_v2_tb3.m) */
+/* harness: nearest point, look-ahead, quantize, bicycle plant (mirrors fcs_mpc_v4_tb.m) */
 static double matmod(double a, double m) { return a - det_floor(a / m) * m; }
 
 static int16_t q16(double v) {
@@ -195,7 +204,7 @@ int main(int argc, char **argv) {
     FILE *f = fopen(out, "w");
     if (!f) { perror("fopen"); return 1; }
 #endif
-    fprintf(f, "step,x,y,psi,v,xq,yq,psiq,vq,rxq,ryq,accel,steer,err\n");
+    fprintf(f, "step,x,y,psi,v,xq,yq,psiq,vq,rxq,ryq,accel,steer,err,vref\n");
     for (int k = 0; k < SIM_STEPS; k++) {
         double dmin; int ni = nearest_idx(x, y, &dmin);
         int midx1 = ni + 1;
@@ -207,12 +216,13 @@ int main(int argc, char **argv) {
         double pw = matmod(psi + PI, 2*PI) - PI;
         int16_t xq=q16(x*SF_POS), yq=q16(y*SF_POS), psiq=q16(pw*SF_PSI);
         int16_t vq=q16(v*SF_V), rxq=q16(rx*SF_POS), ryq=q16(ry*SF_POS), a_int, s_int;
-        mpc_step(xq, yq, psiq, vq, rxq, ryq, &a_int, &s_int);
+        int16_t rvq = VREF[ni];         /* nearest point, matches VIDX='near' in the .m */
+        mpc_step(xq, yq, psiq, vq, rxq, ryq, rvq, &a_int, &s_int);
         fprintf(f, "%d,", k); wd(f, x); fputc(',', f); wd(f, y); fputc(',', f);
         wd(f, psi); fputc(',', f); wd(f, v); fputc(',', f);
         fprintf(f, "%d,%d,%d,%d,%d,%d,%d,%d,", (int)xq,(int)yq,(int)psiq,(int)vq,
                 (int)rxq,(int)ryq,(int)a_int,(int)s_int);
-        wd(f, dmin); fputc('\n', f);
+        wd(f, dmin); fprintf(f, ",%d\n", (int)rvq);
         double acc = (double)a_int / SF_V, str = (double)s_int * STEER_DECODE;
         double sp, cp, ss, cs; sincos_det(psi, &sp, &cp); sincos_det(str, &ss, &cs);
         x += v * cp * TS; y += v * sp * TS;
