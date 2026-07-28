@@ -1,8 +1,9 @@
 %% compare_fpga_matlab.m -- closed-loop validation: C harness (SW or FPGA backend)
+%% v4: CSVs now carry 15 columns (vref appended after err); cols 1-14 unchanged.
 %% vs MATLAB golden. Both share an IEEE-754-only deterministic plant (sincos_det),
 %% so a clean run is bit-identical, not just within tolerance. Build the C app with
 %% -ffp-contract=off. Rename the on-board FPGA-run log to c_closed_loop.csv.
-clear; clc; close all;
+clear; clc;
 
 golden_csv = 'matlab_closed_loop.csv';
 c_csv      = 'c_closed_loop.csv';
@@ -10,7 +11,7 @@ c_csv      = 'c_closed_loop.csv';
 G = load_csv(golden_csv); C = load_csv(c_csv);
 n = min(size(G,1), size(C,1)); G = G(1:n,:); C = C(1:n,:);
 
-% cols: 1 step 2 x 3 y 4 psi 5 v 6 xq 7 yq 8 psiq 9 vq 10 rxq 11 ryq 12 accel 13 steer 14 err
+% cols: 1 step 2 x 3 y 4 psi 5 v 6 xq 7 yq 8 psiq 9 vq 10 rxq 11 ryq 12 accel 13 steer 14 err 15 vref
 intcols  = 6:13;
 row_mm   = any(G(:,intcols) ~= C(:,intcols), 2);
 first_mm = find(row_mm, 1);
@@ -24,6 +25,8 @@ fprintf('  accel / steer mismatches       : %d / %d\n', sum(G(:,12)~=C(:,12)), s
 fprintf('  max |position| diff            : %.3e m\n', max(posdiff));
 fprintf('  max |tracking err| diff        : %.3e m\n', max(abs(G(:,14)-C(:,14))));
 fprintf('  MATLAB peak err / C peak err   : %.3f / %.3f m\n', max(G(:,14)), max(C(:,14)));
+fprintf('  vref (profile) mismatches      : %d\n', sum(G(:,15) ~= C(:,15)));
+fprintf('  MATLAB top speed / C top speed : %.2f / %.2f m/s\n', max(G(:,5)), max(C(:,5)));
 if isempty(first_mm)
     disp('PASS: command sequences bit-identical; trajectories match (shared deterministic plant).');
 else
@@ -32,30 +35,35 @@ else
 end
 
 [rx, ry] = build_reference_track();
-figure('Color','w', 'Position', [100 80 1000 800]);
-subplot(2,2,[1 3]); plot(rx, ry, 'k--'); hold on;
+figure('Color','w', 'Position', [100 60 1050 850]);
+subplot(3,2,[1 3 5]); plot(rx, ry, 'k--'); hold on;
 plot(G(:,2), G(:,3), 'b-'); plot(C(:,2), C(:,3), 'r:');
 axis equal; legend('track','MATLAB','C'); title('Closed-loop trajectory');
-subplot(2,2,2);
+subplot(3,2,2);
 plot(G(:,1), G(:,12), 'b-', C(:,1), C(:,12), 'r:'); hold on;
 plot(G(:,1), G(:,13), 'b--', C(:,1), C(:,13), 'r-.');
 legend('accel M','accel C','steer M','steer C'); title('Commands (int)'); xlabel('step');
-subplot(2,2,4);
+subplot(3,2,4);
+plot(G(:,1), G(:,5), 'b-', C(:,1), C(:,5), 'r:'); hold on;
+plot(C(:,1), C(:,15)/64, 'k--');
+legend('v M','v C','v_{ref} profile'); title('Velocity vs speed profile [m/s]'); xlabel('step');
+subplot(3,2,6);
 plot(G(:,1), G(:,14), 'b-', C(:,1), C(:,14), 'r:'); hold on; plot(C(:,1), posdiff, 'k-');
 legend('err M','err C','|pos diff|'); title('Tracking error and divergence'); xlabel('step');
 
 
 % =======================================================================
 function M = load_csv(path)
+    NCOL = 15;   % v4: step..err (14) + vref
     fid = fopen(path, 'r');
     if fid < 0, error('cannot open %s', path); end
     raw = textscan(fid, '%s', 'Delimiter', '\n', 'Whitespace', ''); fclose(fid);
     lines = raw{1};
     lines = lines(~cellfun('isempty', regexp(lines, '^\s*-?\d', 'once')));  % data rows only: drop banner, header, blanks, '#' footer
-    M = nan(numel(lines), 14);
+    M = nan(numel(lines), NCOL);
     for i = 1:numel(lines)
         v = sscanf(strrep(lines{i}, ',', ' '), '%f');
-        if numel(v) >= 14, M(i,:) = v(1:14).'; end
+        if numel(v) >= NCOL, M(i,:) = v(1:NCOL).'; end
     end
     M = M(~any(isnan(M), 2), :);                 % drop any incomplete trailing row
 end
