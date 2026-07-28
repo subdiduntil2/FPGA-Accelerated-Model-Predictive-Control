@@ -1,5 +1,3 @@
--- AXI4-Lite slave: register bank + kick FSM driving the fcs_mpc_v2_fixpt core.
-
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -37,6 +35,7 @@ end MPC_controller_AXI_v1_0_S00_AXI;
 
 architecture arch_imp of MPC_controller_AXI_v1_0_S00_AXI is
 
+    -- AXI4LITE boilerplate signals
     signal axi_awaddr   : std_logic_vector(C_S_AXI_ADDR_WIDTH-1 downto 0);
     signal axi_awready  : std_logic;
     signal axi_wready   : std_logic;
@@ -48,31 +47,45 @@ architecture arch_imp of MPC_controller_AXI_v1_0_S00_AXI is
     signal axi_rresp    : std_logic_vector(1 downto 0);
     signal axi_rvalid   : std_logic;
 
-    signal slv_reg0     : std_logic_vector(31 downto 0);
-    signal slv_reg1     : std_logic_vector(31 downto 0);
-    signal slv_reg4     : std_logic_vector(31 downto 0);
-    signal slv_reg5     : std_logic_vector(31 downto 0);
-    signal slv_reg6     : std_logic_vector(31 downto 0);
-    signal slv_reg7     : std_logic_vector(31 downto 0);
-    signal slv_reg8     : std_logic_vector(31 downto 0);
-    signal slv_reg9     : std_logic_vector(31 downto 0);
-    signal slv_reg12    : std_logic_vector(31 downto 0);
-    signal slv_reg13    : std_logic_vector(31 downto 0);
-    signal slv_reg16    : std_logic_vector(31 downto 0);
+    -- Register bank corresponding to C code offsets
+    signal slv_reg0     : std_logic_vector(31 downto 0); -- CTRL  (0x00)
+    signal slv_reg1     : std_logic_vector(31 downto 0); -- STATUS(0x04)
+    signal slv_reg4     : std_logic_vector(31 downto 0); -- X     (0x10)
+    signal slv_reg5     : std_logic_vector(31 downto 0); -- Y     (0x14)
+    signal slv_reg6     : std_logic_vector(31 downto 0); -- PSI   (0x18)
+    signal slv_reg7     : std_logic_vector(31 downto 0); -- V     (0x1C)
+    signal slv_reg8     : std_logic_vector(31 downto 0); -- REF_X (0x20)
+    signal slv_reg9     : std_logic_vector(31 downto 0); -- REF_Y (0x24)
+    signal slv_reg10    : std_logic_vector(31 downto 0); -- REF_V (0x28)  v3: speed-profile input
+    signal slv_reg12    : std_logic_vector(31 downto 0); -- ACCEL (0x30)  sign-extended to 32b
+    signal slv_reg13    : std_logic_vector(31 downto 0); -- STEER (0x34)  sign-extended to 32b
+    signal slv_reg16    : std_logic_vector(31 downto 0); -- TICK  (0x40)
 
     signal slv_reg_wren : std_logic;
-    signal slv_reg_rden : std_logic;
     signal aw_en        : std_logic;
-    constant ADDR_LSB   : integer := 2;
 
-    signal mpc_reset    : std_logic;
-    signal mpc_accel    : std_logic_vector(5 downto 0);
-    signal mpc_steer    : std_logic_vector(5 downto 0);
+    -- v3 core is purely combinational; all ports are int16 (16-bit).
+    -- Commands still fit sfix6 (accel -31..20, steer -26..26).
+    signal mpc_accel    : std_logic_vector(15 downto 0);
+    signal mpc_steer    : std_logic_vector(15 downto 0);
     type state_t is (S_IDLE, S_RUN, S_CAPTURE);
     signal state        : state_t := S_IDLE;
     signal wait_cnt     : unsigned(3 downto 0) := (others => '0');
 
+    -- Keep the timing-path endpoints findable by the multicycle XDC
+    attribute DONT_TOUCH : string;
+    attribute DONT_TOUCH of slv_reg4  : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg5  : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg6  : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg7  : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg8  : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg9  : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg10 : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg12 : signal is "TRUE";
+    attribute DONT_TOUCH of slv_reg13 : signal is "TRUE";
+
 begin
+    -- Port I/O assignments
     S_AXI_AWREADY <= axi_awready;
     S_AXI_WREADY  <= axi_wready;
     S_AXI_BRESP   <= axi_bresp;
@@ -81,27 +94,25 @@ begin
     S_AXI_RDATA   <= axi_rdata;
     S_AXI_RRESP   <= axi_rresp;
     S_AXI_RVALID  <= axi_rvalid;
-    mpc_reset     <= not S_AXI_ARESETN;
 
-    -- MPC core instance
-    u_mpc : entity work.fcs_mpc_v2_fixpt
+    -- 1. Instantiate the MPC core (v3, HDL Coder, combinational: no clk/reset)
+    u_mpc : entity work.fcs_mpc_v4
         port map (
-            clk       => S_AXI_ACLK,
-            reset     => mpc_reset,
-            x         => slv_reg4(13 downto 0),
-            y         => slv_reg5(12 downto 0),
-            psi       => slv_reg6(8 downto 0),
-            v         => slv_reg7(8 downto 0),
-            ref_x     => slv_reg8(13 downto 0),
-            ref_y     => slv_reg9(11 downto 0),
+            x         => slv_reg4(15 downto 0),
+            y         => slv_reg5(15 downto 0),
+            psi       => slv_reg6(15 downto 0),
+            v         => slv_reg7(15 downto 0),
+            ref_x     => slv_reg8(15 downto 0),
+            ref_y     => slv_reg9(15 downto 0),
+            ref_v     => slv_reg10(15 downto 0),
             accel_cmd => mpc_accel,
             steer_cmd => mpc_steer
         );
 
-    -- AXI write handshake
+    -- 2. AXI Write Address & Data Handshaking
     process (S_AXI_ACLK)
     begin
-        if rising_edge(S_AXI_ACLK) then 
+        if rising_edge(S_AXI_ACLK) then
             if S_AXI_ARESETN = '0' then
                 axi_awready <= '0';
                 axi_wready  <= '0';
@@ -118,14 +129,16 @@ begin
                 else
                     axi_awready <= '0';
                 end if;
+
                 if (axi_wready = '0' and S_AXI_WVALID = '1' and S_AXI_AWVALID = '1' and aw_en = '1') then
                     axi_wready <= '1';
                 else
                     axi_wready <= '0';
                 end if;
+
                 if (axi_awready = '1' and S_AXI_AWVALID = '1' and axi_wready = '1' and S_AXI_WVALID = '1' and axi_bvalid = '0') then
                     axi_bvalid <= '1';
-                    axi_bresp  <= "00"; 
+                    axi_bresp  <= "00";
                 elsif (S_AXI_BREADY = '1' and axi_bvalid = '1') then
                     axi_bvalid <= '0';
                 end if;
@@ -133,7 +146,7 @@ begin
         end if;
     end process;
 
-    -- Register write + kick FSM
+    -- 3. Register Write Logic & Kick FSM
     slv_reg_wren <= axi_wready and S_AXI_WVALID and axi_awready and S_AXI_AWVALID;
     process (S_AXI_ACLK)
         variable loc_addr : std_logic_vector(4 downto 0);
@@ -141,49 +154,52 @@ begin
         if rising_edge(S_AXI_ACLK) then
             if S_AXI_ARESETN = '0' then
                 state <= S_IDLE;
-                slv_reg0 <= (others => '0');
-                slv_reg4 <= (others => '0');
-                slv_reg5 <= (others => '0');
-                slv_reg6 <= (others => '0');
-                slv_reg7 <= (others => '0');
-                slv_reg8 <= (others => '0');
-                slv_reg9 <= (others => '0');
+                slv_reg0  <= (others => '0');
+                slv_reg4  <= (others => '0');
+                slv_reg5  <= (others => '0');
+                slv_reg6  <= (others => '0');
+                slv_reg7  <= (others => '0');
+                slv_reg8  <= (others => '0');
+                slv_reg9  <= (others => '0');
+                slv_reg10 <= (others => '0');
                 slv_reg16 <= (others => '0');
             else
                 loc_addr := axi_awaddr(6 downto 2);
-                slv_reg0(0) <= '0';
+                slv_reg0(0) <= '0'; -- Kick is self-clearing
 
                 if (slv_reg_wren = '1') then
                     case loc_addr is
-                        when "00000" => slv_reg0 <= S_AXI_WDATA;
-                        when "00100" => slv_reg4 <= S_AXI_WDATA;
-                        when "00101" => slv_reg5 <= S_AXI_WDATA;
-                        when "00110" => slv_reg6 <= S_AXI_WDATA;
-                        when "00111" => slv_reg7 <= S_AXI_WDATA;
-                        when "01000" => slv_reg8 <= S_AXI_WDATA;
-                        when "01001" => slv_reg9 <= S_AXI_WDATA;
-                        when others  => null;
+                        when "00000" => slv_reg0  <= S_AXI_WDATA;
+                        when "00100" => slv_reg4  <= S_AXI_WDATA;
+                        when "00101" => slv_reg5  <= S_AXI_WDATA;
+                        when "00110" => slv_reg6  <= S_AXI_WDATA;
+                        when "00111" => slv_reg7  <= S_AXI_WDATA;
+                        when "01000" => slv_reg8  <= S_AXI_WDATA;
+                        when "01001" => slv_reg9  <= S_AXI_WDATA;
+                        when "01010" => slv_reg10 <= S_AXI_WDATA;  -- REF_V (0x28)
+                        when others  => null; -- Protect status/accel/steer
                     end case;
                 end if;
 
                 case state is
                     when S_IDLE =>
-                        slv_reg1(1) <= '0';
+                        slv_reg1(1) <= '0'; -- Busy=0
                         if (slv_reg_wren = '1' and loc_addr = "00000" and S_AXI_WDATA(0) = '1') then
                             state <= S_RUN;
                             wait_cnt <= (others => '0');
-                            slv_reg1(0) <= '0';
-                            slv_reg1(1) <= '1';
+                            slv_reg1(0) <= '0'; -- Clear Done
+                            slv_reg1(1) <= '1'; -- Busy=1
                         end if;
                     when S_RUN =>
+                        -- Solve window. Must be >= the multicycle N declared in
+                        -- mpc_timing.xdc. wait_cnt = N-2 gives an N-cycle path.
                         wait_cnt <= wait_cnt + 1;
                         if wait_cnt = 4 then state <= S_CAPTURE; end if;
                     when S_CAPTURE =>
-                        slv_reg12(31 downto 6) <= (others => mpc_accel(5));
-                        slv_reg12(5 downto 0)  <= mpc_accel;
-                        slv_reg13(31 downto 6) <= (others => mpc_steer(5));
-                        slv_reg13(5 downto 0)  <= mpc_steer;
-                        slv_reg1(0) <= '1';
+                        -- v3 outputs are int16; resize to 32b keeps the sign correct.
+                        slv_reg12 <= std_logic_vector(resize(signed(mpc_accel), 32));
+                        slv_reg13 <= std_logic_vector(resize(signed(mpc_steer), 32));
+                        slv_reg1(0) <= '1'; -- Done=1
                         slv_reg16 <= std_logic_vector(unsigned(slv_reg16) + 1);
                         state <= S_IDLE;
                 end case;
@@ -191,7 +207,7 @@ begin
         end if;
     end process;
 
-    -- AXI read handshake + readback mux
+    -- 4. AXI Read Logic
     process (S_AXI_ACLK)
     begin
         if rising_edge(S_AXI_ACLK) then
@@ -219,6 +235,7 @@ begin
                         when "00111" => axi_rdata <= slv_reg7;
                         when "01000" => axi_rdata <= slv_reg8;
                         when "01001" => axi_rdata <= slv_reg9;
+                        when "01010" => axi_rdata <= slv_reg10;   -- REF_V read-back
                         when "01100" => axi_rdata <= slv_reg12;
                         when "01101" => axi_rdata <= slv_reg13;
                         when "10000" => axi_rdata <= slv_reg16;
@@ -231,6 +248,7 @@ begin
         end if;
     end process;
 
+    -- Interrupt logic: done AND irq_en
     mpc_irq <= slv_reg1(0) and slv_reg0(2);
 
 end arch_imp;
