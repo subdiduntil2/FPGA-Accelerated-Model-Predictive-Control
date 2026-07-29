@@ -81,6 +81,44 @@ static void mpc_step_sw(int16_t x, int16_t y, int16_t psi, int16_t v,
 }
 #endif  /* !USE_FPGA */
 
+/* ---- Latency instrumentation -------------------------------------------------
+   Per-step timing of the MPC call. Two quantities are captured:
+     pl_ns  kick write -> DONE observed. The solve plus one AXI read round trip
+            and the polling granularity, so it upper-bounds the core's own 6-cycle
+            (120 ns) settle time. This is the same definition the earlier replay
+            application used, kept so the numbers stay comparable.
+     e2_ns  first input write -> second output read returned. Adds the six input
+            writes and the two result reads, i.e. the whole per-step bus cost.
+   Source is the Cortex-A9 global timer through the BSP (XTime_GetTime), which runs
+   at half the CPU clock: 333.33 MHz on the Cora, so one tick is 3 ns. On a host
+   build both columns are emitted as zero so the CSV keeps a single shape.        */
+#define MPC_MEASURE_LATENCY 1
+
+static uint32_t g_pl_ns = 0, g_e2_ns = 0;      /* most recent step, printed every row */
+
+#if USE_FPGA && MPC_MEASURE_LATENCY
+static uint32_t g_pl_min = 0xFFFFFFFFu, g_pl_max = 0, g_e2_min = 0xFFFFFFFFu, g_e2_max = 0;
+static uint64_t g_pl_sum = 0, g_e2_sum = 0;
+static uint32_t g_lat_n = 0, g_timer_overhead_ns = 0;
+#include "xtime_l.h"
+#define TICKS_TO_NS(d) ((uint32_t)(((uint64_t)(d) * 1000000000ULL) / COUNTS_PER_SECOND))
+static void lat_calibrate(void) {                /* cost of the measurement itself */
+    XTime a, b; uint64_t acc = 0;
+    for (int i = 0; i < 64; i++) { XTime_GetTime(&a); XTime_GetTime(&b); acc += (uint64_t)(b - a); }
+    g_timer_overhead_ns = TICKS_TO_NS(acc / 64);
+}
+static void lat_record(uint32_t pl_ns, uint32_t e2_ns) {
+    g_pl_ns = pl_ns; g_e2_ns = e2_ns;
+    if (pl_ns < g_pl_min) g_pl_min = pl_ns;
+    if (pl_ns > g_pl_max) g_pl_max = pl_ns;
+    if (e2_ns < g_e2_min) g_e2_min = e2_ns;
+    if (e2_ns > g_e2_max) g_e2_max = e2_ns;
+    g_pl_sum += pl_ns; g_e2_sum += e2_ns; g_lat_n++;
+}
+#else
+static void lat_calibrate(void) { }
+#endif
+
 /* FPGA backend: same per-step AXI query as mpc_smoketest.c, closed in software */
 #if USE_FPGA
 #include "xparameters.h"
@@ -107,15 +145,29 @@ static void mpc_step_sw(int16_t x, int16_t y, int16_t psi, int16_t v,
 static void mpc_step_fpga(int16_t x, int16_t y, int16_t psi, int16_t v,
                           int16_t ref_x, int16_t ref_y, int16_t ref_v,
                           int16_t *accel, int16_t *steer) {
+#if MPC_MEASURE_LATENCY
+    XTime t0, t1, t2, t3;
+    XTime_GetTime(&t0);                                              /* before first write */
+#endif
     Xil_Out32(MPC_BASE+R_X,(uint32_t)(int32_t)x);   Xil_Out32(MPC_BASE+R_Y,(uint32_t)(int32_t)y);
     Xil_Out32(MPC_BASE+R_PSI,(uint32_t)(int32_t)psi); Xil_Out32(MPC_BASE+R_V,(uint32_t)(int32_t)v);
     Xil_Out32(MPC_BASE+R_REF_X,(uint32_t)(int32_t)ref_x); Xil_Out32(MPC_BASE+R_REF_Y,(uint32_t)(int32_t)ref_y);
     Xil_Out32(MPC_BASE+R_REF_V,(uint32_t)(int32_t)ref_v);            /* v4: MUST be written */
     Xil_Out32(MPC_BASE+R_CTRL, CTRL_KICK|CTRL_EN);
+#if MPC_MEASURE_LATENCY
+    XTime_GetTime(&t1);                                              /* kick issued */
+#endif
     while (!(Xil_In32(MPC_BASE+R_STATUS) & STATUS_DONE)) { }
+#if MPC_MEASURE_LATENCY
+    XTime_GetTime(&t2);                                              /* DONE observed */
+#endif
     int a = Xil_In32(MPC_BASE+R_ACCEL) & 0x3F; if (a & 0x20) a -= 64;
     int s = Xil_In32(MPC_BASE+R_STEER) & 0x3F; if (s & 0x20) s -= 64;
     *accel = (int16_t)a; *steer = (int16_t)s;
+#if MPC_MEASURE_LATENCY
+    XTime_GetTime(&t3);                                              /* results in hand */
+    lat_record(TICKS_TO_NS(t2 - t1), TICKS_TO_NS(t3 - t0));
+#endif
 }
   #define BACKEND_NAME "FPGA"
   #define mpc_step mpc_step_fpga
@@ -196,6 +248,7 @@ int main(int argc, char **argv) {
 #if !USE_FPGA
     build_luts();
 #endif
+    lat_calibrate();
     double x = X0, y = Y0, psi = PSI0, v = V0, max_err = 0;
     int laps = 0, prev1 = 1, last1 = 1;
 #if BARE_METAL
@@ -204,7 +257,7 @@ int main(int argc, char **argv) {
     FILE *f = fopen(out, "w");
     if (!f) { perror("fopen"); return 1; }
 #endif
-    fprintf(f, "step,x,y,psi,v,xq,yq,psiq,vq,rxq,ryq,accel,steer,err,vref\n");
+    fprintf(f, "step,x,y,psi,v,xq,yq,psiq,vq,rxq,ryq,accel,steer,err,vref,pl_ns,e2_ns\n");
     for (int k = 0; k < SIM_STEPS; k++) {
         double dmin; int ni = nearest_idx(x, y, &dmin);
         int midx1 = ni + 1;
@@ -222,7 +275,7 @@ int main(int argc, char **argv) {
         wd(f, psi); fputc(',', f); wd(f, v); fputc(',', f);
         fprintf(f, "%d,%d,%d,%d,%d,%d,%d,%d,", (int)xq,(int)yq,(int)psiq,(int)vq,
                 (int)rxq,(int)ryq,(int)a_int,(int)s_int);
-        wd(f, dmin); fprintf(f, ",%d\n", (int)rvq);
+        wd(f, dmin); fprintf(f, ",%d,%u,%u\n", (int)rvq, (unsigned)g_pl_ns, (unsigned)g_e2_ns);
         double acc = (double)a_int / SF_V, str = (double)s_int * STEER_DECODE;
         double sp, cp, ss, cs; sincos_det(psi, &sp, &cp); sincos_det(str, &ss, &cs);
         x += v * cp * TS; y += v * sp * TS;
@@ -232,6 +285,16 @@ int main(int argc, char **argv) {
     fprintf(f, "# backend=%s steps=%d laps=", BACKEND_NAME, SIM_STEPS);
     wd(f, laps + (double)last1 / TRACK_POINTS); fprintf(f, " max_err="); wd(f, max_err);
     fprintf(f, " m\n");
+#if USE_FPGA && MPC_MEASURE_LATENCY
+    if (g_lat_n) {
+        fprintf(f, "# pl_ns  min=%u avg=%u max=%u\n", (unsigned)g_pl_min,
+                (unsigned)(g_pl_sum / g_lat_n), (unsigned)g_pl_max);
+        fprintf(f, "# e2_ns  min=%u avg=%u max=%u\n", (unsigned)g_e2_min,
+                (unsigned)(g_e2_sum / g_lat_n), (unsigned)g_e2_max);
+        fprintf(f, "# timer tick=%u ns, read overhead=%u ns, samples=%u\n",
+                (unsigned)TICKS_TO_NS(1), (unsigned)g_timer_overhead_ns, (unsigned)g_lat_n);
+    }
+#endif
     for (;;) { }                        /* idle so the UART capture completes */
 #else
     fclose(f);
