@@ -15,64 +15,52 @@ The present configuration targets a **known circuit**. Two quantities are comput
 
 At run time the controller receives the nearest path vertex, a look-ahead vertex, and the profile speed at the current position. It does not build a map, and it does not compute a speed profile online. This matches a race or test-track application in which the circuit is surveyed in advance. Section 1 of the report in `docs/` states the assumption in full, and the planned work below covers the unknown-track case.
 
-## Results
-
-**Timing.** The design closes with 10.449 ns of worst-case setup slack against a 20 ns period, no failing endpoints across 2,077 setup and 2,077 hold paths, and no unconstrained paths. The worst path is not in the controller: it runs from the processor system reset into the control register, has one logic level, and is 93% route delay.
-
-**Area.** 7,854 of 14,400 LUTs (54.5%), 870 flip-flops, 40 DSP slices, no block RAM. The earlier 136-candidate core needed 16,939 LUTs, which exceeds the device, and never reached the placer. Exploiting the separability of the cost function cut LUT usage by 54% and moved the controller off the critical path. All 40 DSPs belong to the controller, since nothing else in the design infers one.
-
-**Power.** Total on-chip power is 1.381 W. The MPC peripheral accounts for 12 mW of that and the whole programmable-logic side about 14 mW, against 1.251 W for the processing system. Running the control law in software would not avoid that 1.251 W; it would occupy it. The estimate is vectorless, so treat the absolute values as indicative and the distribution as the result.
-
-**Latency.** A solve takes 341 ns on average, of which only 120 ns is the controller itself, six clocks at 50 MHz fixed by the capture state machine. The rest is the AXI status read and the timestamp cost. A full control step, including seven input writes, the kick and two result reads, averages 3.76 µs. Bus traffic is 96.8% of that and the controller is 3.2%, so the worthwhile optimisation is fewer bus transactions rather than a faster core. Against the 100 ms sampling period the whole exchange uses 0.0038% of the budget. Both maxima in the run belong to step 0, which pays for cold caches; every later step falls within 9 ns of the average.
-
-**Closed-loop behaviour.** 2.54 laps in 80 s, 10.20 m/s top speed, 0.866 m peak tracking error against a 1.0 m limit.
-
-## Validation
-
-The implementation is checked at five levels, each against a bit-exact MATLAB golden model: algorithmic equivalence of the restructured controller against the previous revision, golden-vector replay in MATLAB, RTL simulation in Vivado xsim, a software closed loop on a host, and the closed loop on hardware.
-
-The last of these is the one that matters. The plant runs on the PS, the MPC IP closes the loop over AXI, and errors compound instead of resetting. All 801 rows match the golden model on every integer column, with zero differences in the quantised state, the references, the profile speed and both commands. The residual position difference is 7.07e-7 m, which is the print resolution of the bare-metal CSV formatter rather than numerical drift: across 4,806 quantisation events not one produced a different integer. The capture was also re-checked independently of the comparison script against a separate reimplementation of the controller and plant, which reproduces the same result.
-
-## How this compares
-
-Published embedded MPC implementations span roughly 67 µs on a motor-drive DSP to 17 ms on an embedded CPU, drawing between 0.2 W and 6.5 W. Measured energy per control step in that literature ranges from tens of microjoules on a microcontroller to tens of millijoules on a GPU. This design uses 5.20 µJ per step for the whole chip and 45 nJ for the accelerator increment, which is two to three orders of magnitude below any of them.
-
-That advantage is real but it partly reflects a smaller problem. Sampling-based implementations evaluate thousands of rollouts over a 40-step horizon, and nonlinear MPC for autonomous driving solves a program with tyre models and obstacle constraints; this controller evaluates 25 terms at a horizon of one. The fair claim is narrower: for horizon-1 finite-control-set path tracking, the design reaches microsecond end-to-end latency at 12 mW of incremental power, which places it in the latency and energy class of motor-drive FCS-MPC on a DSP while addressing a task that normally needs millisecond-class platforms. The price is the horizon-1 restriction.
-
-Section 7 of the report gives the full comparison with per-platform figures, provenance for every power number, and citations.
-
 ## Repository layout
 
 Every artifact below belongs to the current v4 closed-loop revision. The MATLAB testbench is the single generator: the vector files, the C header and the golden trajectory all come from one run, which is what keeps the four implementations from drifting apart.
 
 **`matlab/`**
 
-- `fcs_mpc_v4.m` — the controller, and the specification against which everything else is checked.
-- `fcs_mpc_v4_tb.m` — closed-loop golden testbench. Builds the circuit and the curvature-based speed profile, runs the loop, and writes the nine `.dat` vectors, `reference_track.h` and `matlab_closed_loop.csv`.
-- `fcs_mpc_v4_hdltb.m` — replays the exported vectors through the controller. This is the gate that must read 801/801 before any hardware is generated.
-- `compare_fpga_matlab.m` — 15-column closed-loop comparison of the board capture against the golden run.
+- `fcs_mpc_v4.m`: the controller, and the specification against which everything else is checked.
+- `fcs_mpc_v4_tb.m`: closed-loop golden testbench. Builds the circuit and the curvature-based speed profile, runs the loop, and writes the nine `.dat` vectors, `reference_track.h` and `matlab_closed_loop.csv`.
+- `fcs_mpc_v4_hdltb.m`: replays the exported vectors through the controller. This is the gate that must read 801/801 before any hardware is generated.
+- `compare_fpga_matlab.m`: 15-column closed-loop comparison of the board capture against the golden run.
 
 **`hdl/`**
 
-- `fcs_mpc_v4.vhd`, `fcs_mpc_v4_pkg.vhd` — the generated combinational core (seven `int16` inputs, two `int16` outputs, registered input and output stages) and its type package.
-- `fcs_mpc_v4_tb.vhd`, `fcs_mpc_v4_tb_pkg.vhd` — the generated self-checking testbench, which drives the vector files and raises `testFailure` on any command mismatch.
-- `MPC_controller_AXI_v1_0.vhd`, `MPC_controller_AXI_v1_0_S00_AXI.vhd` — the IP top level, and the register file with the kick/run/capture state machine and the core instantiation.
-- `design_1.vhd`, `design_1_MPC_controller_AXI_0_1.vhd`, `design_1_wrapper.vhd` — block design output.
+- `fcs_mpc_v4.vhd`, `fcs_mpc_v4_pkg.vhd`: the generated combinational core (seven `int16` inputs, two `int16` outputs, registered input and output stages) and its type package.
+- `fcs_mpc_v4_tb.vhd`, `fcs_mpc_v4_tb_pkg.vhd`: the generated self-checking testbench, which drives the vector files and raises `testFailure` on any command mismatch.
+- `MPC_controller_AXI_v1_0.vhd`, `MPC_controller_AXI_v1_0_S00_AXI.vhd`: the IP top level, and the register file with the kick/run/capture state machine and the core instantiation.
+- `design_1.vhd`, `design_1_MPC_controller_AXI_0_1.vhd`, `design_1_wrapper.vhd`: block design output.
 
 **`hw/`**
 
-- `design_1.bd` — block design source.
-- `design_1_wrapper.xsa` — hardware handoff for Vitis, exported with the bitstream included.
-- `mpc_timing.xdc` — the multicycle exception on the controller path, six cycles setup and five hold, coupled to the state machine terminal count.
+- `design_1.bd`: block design source.
+- `design_1_wrapper.xsa`: hardware handoff for Vitis, exported with the bitstream included.
+- `mpc_timing.xdc`: the multicycle exception on the controller path, six cycles setup and five hold, coupled to the state machine terminal count.
 
 **`src/`**
 
-- `mpc_closed_loop.c` — closed-loop harness with the software and FPGA backends and the deterministic plant.
-- `reference_track.h` — generated: the 358-vertex path, the `VREF` speed table, the plant constants and the scale factors.
+- `mpc_closed_loop.c`: closed-loop harness with the software and FPGA backends, the deterministic plant, and the per-step latency instrumentation.
+- `reference_track.h`: generated by the testbench. Holds the 358-vertex path, the `VREF` speed table, the plant constants and the scale factors.
 
-**`docs/`** — the analytical report and the reference paper.
+**`docs/`**: the analytical report and the reference paper.
 
 Two files are absent by design. The controller is no longer hand-written, so no maintained VHDL source exists separately from the generated core; the MATLAB function is edited and the hardware regenerated. The open-loop replay application has been retired in favour of the closed-loop harness, which subsumes it.
+
+## Results
+
+Timing closes with 10.449 ns of setup slack against a 20 ns period, no failing endpoints in setup or hold, and no unconstrained paths. The worst path avoids the controller entirely. It runs from the processor system reset into the control register, crosses one logic level, and spends 93% of its delay in routing. Area comes to 7,854 of 14,400 LUTs, 870 flip-flops, 40 DSP slices and no block RAM. The earlier 136-candidate core needed 16,939 LUTs and never reached the placer; exploiting the separability of the cost cut LUT use by 54% and took the controller off the critical path. All 40 DSPs belong to the controller, since nothing else in the design infers one.
+
+Total on-chip power is 1.381 W. The MPC peripheral draws 12 mW of it, the processing system 1.251 W. Running the control law in software would not avoid that 1.251 W. It would occupy it. The estimate is vectorless, so read the distribution between blocks as the result and the absolute values as indicative.
+
+A solve averages 341 ns, of which only 120 ns is the controller: six clocks at 50 MHz, fixed by the capture state machine. The remainder is the AXI status read. With the seven input writes, the kick and the two result reads included, a full step averages 3.76 µs, so bus traffic accounts for 96.8% of the per-step cost against 3.2% for the controller. The whole exchange consumes 0.0038% of the 100 ms sampling period.
+
+In closed loop the vehicle covers 2.54 laps in 80 s at up to 10.20 m/s. Peak tracking error is 0.866 m against a 1.0 m limit. Validation runs at five levels against a bit-exact MATLAB golden model and ends with the loop closed on hardware, where the plant runs on the PS, the controller in the fabric, and errors compound from step to step. All 801 rows match on every integer column. The residual position difference of 7.07e-7 m comes from the six-digit bare-metal print formatter rather than from drift, and not one of the 4,806 quantisation events produced a different integer.
+
+Published embedded MPC spans roughly 67 µs on a motor-drive DSP to 17 ms on an embedded CPU, at 0.2 W to 6.5 W, and tens of microjoules to tens of millijoules per control step. This design uses 5.20 µJ per step for the whole chip and 45 nJ for the accelerator increment. Part of that gap is problem size: sampling-based methods evaluate thousands of rollouts over a 40-step horizon, while this controller evaluates 25 terms at horizon 1. The narrower claim survives. For horizon-1 finite-control-set path tracking the design reaches microsecond latency at 12 mW of incremental power, which puts it in the class of motor-drive FCS-MPC on a DSP while serving a task that normally needs millisecond-class hardware.
+
+Sections 4 to 7 of the report carry the tables, the per-platform figures and the citations.
 
 ## Reproducing the result
 
