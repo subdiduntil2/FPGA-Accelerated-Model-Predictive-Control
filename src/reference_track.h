@@ -1,5 +1,4 @@
-// late july
-// reference_track.h - auto-generated closed-loop track + sim params (matches fcs_mpc_v4_tb.m). DO NOT EDIT.
+// Auto-generated closed-loop track + sim params, late July (matches fcs_mpc_v4_tb.m). DO NOT EDIT.
 #ifndef REFERENCE_TRACK_H
 #define REFERENCE_TRACK_H
 
@@ -11,8 +10,7 @@ static const double SF_POS = 64, SF_PSI = 41, SF_V = 64;
 static const double STEER_DECODE = 0.025, V_DRAG = 0.99;
 static const double LOOKAHEAD_MIN = 0.8, LOOKAHEAD_GAIN = 0.25;
 static const double X0 = 0.0, Y0 = 0.0, PSI0 = 0.0, V0 = 0.0;
-// Speed profile source parameters (profile precomputed in MATLAB):
-// V_TOP = 10 m/s, A_LAT = 4, A_BRK = 3.5, A_ACC = 3 m/s^2
+// Speed profile precomputed in MATLAB from V_TOP = 10 m/s, A_LAT = 4, A_BRK = 3.5, A_ACC = 3 m/s^2
 
 static const double REF_X[TRACK_POINTS] = {
   0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 

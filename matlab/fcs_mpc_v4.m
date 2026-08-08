@@ -1,9 +1,7 @@
 function [accel_cmd, steer_cmd] = fcs_mpc_v4(x, y, psi, v, ref_x, ref_y, ref_v)
     %#codegen
-    % Area/timing-optimised restatement of fcs_mpc_v3. Bit-identical outputs.
-    % cost(s,a) = A(s) + B(a) is separable, so 17 kinematic cones + 8 speed
-    % terms replace 136 full evaluations, and the 136-deep argmin becomes two
-    % independent first-minimum scans (17 and 8).
+    % Separable cost A(s)+B(a): 17 steer cones + 8 speed terms replace 136
+    % evaluations, and the 136-deep argmin becomes two scans. Bit-identical to v3.
     V_MAX = int16(640);
     W_ERR = int16(15); W_STEER = int16(2); W_SPEED = int16(2);
     W_OVER = int16(6); OV_MAX = int16(255);

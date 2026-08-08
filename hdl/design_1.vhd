@@ -1,12 +1,5 @@
 --Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
-----------------------------------------------------------------------------------
---Tool Version: Vivado v.2022.1 (win64) Build 3526262 Mon Apr 18 15:48:16 MDT 2022
---Date        : Tue Jul 28 19:25:46 2026
---Host        : JZDH424 running 64-bit major release  (build 9200)
---Command     : generate_target design_1.bd
---Design      : design_1
---Purpose     : IP block netlist
-----------------------------------------------------------------------------------
+--design_1: IP block netlist generated from design_1.bd by Vivado 2022.1.
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 library UNISIM;

@@ -1,8 +1,5 @@
-%% compare_fpga_matlab.m -- closed-loop validation: C harness (SW or FPGA backend)
-%% v4: CSVs now carry 15 columns (vref appended after err); cols 1-14 unchanged.
-%% vs MATLAB golden. Both share an IEEE-754-only deterministic plant (sincos_det),
-%% so a clean run is bit-identical, not just within tolerance. Build the C app with
-%% -ffp-contract=off. Rename the on-board FPGA-run log to c_closed_loop.csv.
+%% compare_fpga_matlab.m -- C harness (SW or FPGA backend, log renamed to c_closed_loop.csv)
+%% vs MATLAB golden. Shared deterministic plant => bit-identical; build C -ffp-contract=off.
 clear; clc;
 
 golden_csv = 'matlab_closed_loop.csv';
@@ -52,7 +49,6 @@ plot(G(:,1), G(:,14), 'b-', C(:,1), C(:,14), 'r:'); hold on; plot(C(:,1), posdif
 legend('err M','err C','|pos diff|'); title('Tracking error and divergence'); xlabel('step');
 
 
-% =======================================================================
 function M = load_csv(path)
     NCOL = 15;   % v4: step..err (14) + vref
     fid = fopen(path, 'r');

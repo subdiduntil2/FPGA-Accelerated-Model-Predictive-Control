@@ -64,8 +64,7 @@ architecture arch_imp of MPC_controller_AXI_v1_0_S00_AXI is
     signal slv_reg_wren : std_logic;
     signal aw_en        : std_logic;
 
-    -- v3 core is purely combinational; all ports are int16 (16-bit).
-    -- Commands still fit sfix6 (accel -31..20, steer -26..26).
+    -- Combinational core, int16 ports; commands fit sfix6 (accel -31..20, steer -26..26).
     signal mpc_accel    : std_logic_vector(15 downto 0);
     signal mpc_steer    : std_logic_vector(15 downto 0);
     type state_t is (S_IDLE, S_RUN, S_CAPTURE);
@@ -95,7 +94,7 @@ begin
     S_AXI_RRESP   <= axi_rresp;
     S_AXI_RVALID  <= axi_rvalid;
 
-    -- 1. Instantiate the MPC core (v3, HDL Coder, combinational: no clk/reset)
+    -- 1. MPC core (HDL Coder, combinational: no clk/reset)
     u_mpc : entity work.fcs_mpc_v4
         port map (
             x         => slv_reg4(15 downto 0),
@@ -191,12 +190,11 @@ begin
                             slv_reg1(1) <= '1'; -- Busy=1
                         end if;
                     when S_RUN =>
-                        -- Solve window. Must be >= the multicycle N declared in
-                        -- mpc_timing.xdc. wait_cnt = N-2 gives an N-cycle path.
+                        -- Solve window; wait_cnt = N-2 gives the N-cycle path set in mpc_timing.xdc.
                         wait_cnt <= wait_cnt + 1;
                         if wait_cnt = 4 then state <= S_CAPTURE; end if;
                     when S_CAPTURE =>
-                        -- v3 outputs are int16; resize to 32b keeps the sign correct.
+                        -- int16 outputs resized to 32b, sign preserved
                         slv_reg12 <= std_logic_vector(resize(signed(mpc_accel), 32));
                         slv_reg13 <= std_logic_vector(resize(signed(mpc_steer), 32));
                         slv_reg1(0) <= '1'; -- Done=1

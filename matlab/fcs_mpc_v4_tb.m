@@ -157,7 +157,6 @@ end
 end
 
 
-% =======================================================================
 % Menger curvature per point, window-max, v=sqrt(A_LAT/kappa) capped at V_TOP,
 % then backward (braking) and forward (accel) passes around the closed track.
 function vprof = build_speed_profile(rx, ry, V_TOP, A_LAT, A_BRK, A_ACC)
@@ -203,7 +202,6 @@ function vprof = build_speed_profile(rx, ry, V_TOP, A_LAT, A_BRK, A_ACC)
     end
 end
 
-% =======================================================================
 % Deterministic sin/cos, IEEE-754 ops only, identical to the C harness (shared plant)
 function [s, c] = sincos_det(z)
     zr = z - 6.283185307179586 * round(z / 6.283185307179586);
@@ -341,8 +339,7 @@ function emit_int16_array(h, name, v)
     fprintf(h, '};\n');
 end
 
-% Golden closed-loop CSV; v3 appends vref after err so columns 1..14 keep
-% their v2 meaning and the comparison script needs only a width update.
+% Golden closed-loop CSV; vref appended after err so columns 1..14 keep their meaning.
 function write_closed_loop_csv(out_dir, xp, yp, psip, vp, xq, yq, psiq, vq, rxq, ryq, ai, si, err, rv)
     N = numel(xp);
     f = fopen(fullfile(out_dir, 'matlab_closed_loop.csv'), 'w');

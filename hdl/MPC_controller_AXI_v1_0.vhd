@@ -8,7 +8,7 @@ entity MPC_controller_AXI_v1_0 is
         C_S00_AXI_ADDR_WIDTH    : integer    := 7 -- 7 bits for offsets up to 0x40
     );
     port (
-        -- User port: Connect this to IRQ_F2P in Block Design
+        -- Connect to IRQ_F2P in the block design
         mpc_irq         : out std_logic; 
 
         -- Standard AXI Slave Ports

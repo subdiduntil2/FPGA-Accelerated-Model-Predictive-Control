@@ -1,8 +1,5 @@
-/* Closed-loop validation harness for the FCS-MPC controller.
- * Backend (controller source): bare-metal ARM target (the Cora) -> FPGA, query the
- * IP over AXI; host build -> SW, the bit-exact C port. Override with -DMPC_BACKEND_FPGA
- * or -DMPC_BACKEND_SW. Output streams to the UART on bare metal (no fopen) and to a
- * file on the host. */
+/* Closed-loop harness for the FCS-MPC controller. Bare-metal ARM (Cora) -> FPGA IP over AXI,
+ * host -> bit-exact C port (-DMPC_BACKEND_FPGA/-DMPC_BACKEND_SW); output to UART, else file. */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -29,9 +26,8 @@
 #  define BARE_METAL 0
 #endif
 
-/* Software reference controller (LUTs + FCS search). Compiled ONLY when the SW
-   backend is selected; the FPGA binary omits it entirely, so a closed-loop FPGA
-   run can obtain its commands only from the IP over AXI � never in software. */
+/* Software reference controller (LUTs + FCS search), compiled ONLY for the SW backend, so a
+   closed-loop FPGA run can obtain its commands only from the IP over AXI. */
 #if !USE_FPGA
 static int16_t SIN_LUT[256], COS_LUT[256];
 static void build_luts(void) {
@@ -81,17 +77,8 @@ static void mpc_step_sw(int16_t x, int16_t y, int16_t psi, int16_t v,
 }
 #endif  /* !USE_FPGA */
 
-/* ---- Latency instrumentation -------------------------------------------------
-   Per-step timing of the MPC call. Two quantities are captured:
-     pl_ns  kick write -> DONE observed. The solve plus one AXI read round trip
-            and the polling granularity, so it upper-bounds the core's own 6-cycle
-            (120 ns) settle time. This is the same definition the earlier replay
-            application used, kept so the numbers stay comparable.
-     e2_ns  first input write -> second output read returned. Adds the six input
-            writes and the two result reads, i.e. the whole per-step bus cost.
-   Source is the Cortex-A9 global timer through the BSP (XTime_GetTime), which runs
-   at half the CPU clock: 333.33 MHz on the Cora, so one tick is 3 ns. On a host
-   build both columns are emitted as zero so the CSV keeps a single shape.        */
+/* Per-step latency: pl_ns = kick -> DONE (upper-bounds the core's 6-cycle/120 ns settle),
+   e2_ns = first write -> last read. Cortex-A9 global timer, 3 ns/tick; zero on host builds. */
 #define MPC_MEASURE_LATENCY 1
 
 static uint32_t g_pl_ns = 0, g_e2_ns = 0;      /* most recent step, printed every row */
